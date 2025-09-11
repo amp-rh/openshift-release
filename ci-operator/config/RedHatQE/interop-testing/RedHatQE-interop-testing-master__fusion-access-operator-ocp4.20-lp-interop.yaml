@@ -64,17 +64,12 @@ tests:
     env:
       BASE_DOMAIN: cspilp.interop.ccitredhat.com
       COMPUTE_NODE_TYPE: m5.2xlarge
-      CUSTOM_SECURITY_GROUP_PORTS: 12345,1191,60000-61000
-      CUSTOM_SECURITY_GROUP_PROTOCOLS: tcp
-      CUSTOM_SECURITY_GROUP_SOURCES: ""
       FIPS_ENABLED: "false"
       FIREWATCH_CONFIG_FILE_PATH: https://raw.githubusercontent.com/CSPI-QE/cspi-utils/main/firewatch-base-configs/aws-ipi/lp-interop.json
       FIREWATCH_DEFAULT_JIRA_ADDITIONAL_LABELS: '["4.20-lp", "self-managed-lp", "fusion-access-lp"]'
       FIREWATCH_DEFAULT_JIRA_ASSIGNEE: mbaldess@redhat.com
       FIREWATCH_DEFAULT_JIRA_PROJECT: LPINTEROP
       FIREWATCH_FAIL_WITH_TEST_FAILURES: "true"
-      FUSION_ACCESS_NAMESPACE: ibm-fusion-access
-      FUSION_ACCESS_STORAGE_SCALE_VERSION: v5.2.3.1
       OPERATORS: |
         [
           {
@@ -86,12 +81,6 @@ tests:
           }
         ]
       RE_TRIGGER_ON_FAILURE: "false"
-      STORAGE_SCALE_CLIENT_CPU: "2"
-      STORAGE_SCALE_CLIENT_MEMORY: 4Gi
-      STORAGE_SCALE_CLUSTER_NAME: ibm-spectrum-scale
-      STORAGE_SCALE_NAMESPACE: ibm-spectrum-scale
-      STORAGE_SCALE_STORAGE_CPU: "2"
-      STORAGE_SCALE_STORAGE_MEMORY: 8Gi
       USER_TAGS: |
         scenario fusion-access
     post:
@@ -102,9 +91,6 @@ tests:
     test:
     - chain: cucushift-installer-check-cluster-health
     - ref: install-operators
-    - ref: interop-tests-configure-aws-security-groups
-    - ref: interop-tests-deploy-fusion-access
-    - ref: interop-tests-fusion-access-tests
     workflow: firewatch-ipi-aws
   timeout: 6h0m0s
 zz_generated_metadata:
