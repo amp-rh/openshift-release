@@ -46,7 +46,8 @@ tests:
       CUSTOM_SECURITY_GROUP_SOURCES: ""
       FIPS_ENABLED: "false"
       FIREWATCH_CONFIG_FILE_PATH: https://raw.githubusercontent.com/CSPI-QE/cspi-utils/main/firewatch-base-configs/aws-ipi/lp-interop.json
-      FIREWATCH_DEFAULT_JIRA_ADDITIONAL_LABELS: '["4.20-lp", "self-managed-lp", "fusion-access-lp", "fusion-access-cnv-lp"]'
+      FIREWATCH_DEFAULT_JIRA_ADDITIONAL_LABELS: '["4.20-lp", "self-managed-lp", "fusion-access-lp",
+        "fusion-access-cnv-lp"]'
       FIREWATCH_DEFAULT_JIRA_ASSIGNEE: mbaldess@redhat.com
       FIREWATCH_DEFAULT_JIRA_PROJECT: LPINTEROP
       FIREWATCH_FAIL_WITH_TEST_FAILURES: "true"
@@ -77,4 +78,3 @@ zz_generated_metadata:
   org: RedHatQE
   repo: interop-testing
   variant: fusion-access-cnv-ocp4.20-lp-interop
-
