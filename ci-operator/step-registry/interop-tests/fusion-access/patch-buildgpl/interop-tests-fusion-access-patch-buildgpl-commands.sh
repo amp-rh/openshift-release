@@ -50,7 +50,7 @@ fi
 echo ""
 echo "Patching buildgpl script to fix compatibility issues..."
 
-# Apply the patch using a here-document with YAML format (avoids JSON newline escaping issues)
+0# Apply the patch using a here-document with YAML format (avoids JSON newline escaping issues)
 if oc patch configmap buildgpl -n "${STORAGE_SCALE_NAMESPACE}" --type=merge -p "$(cat <<EOF
 data:
   buildgpl: |
