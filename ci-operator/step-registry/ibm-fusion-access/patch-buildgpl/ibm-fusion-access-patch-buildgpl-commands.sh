@@ -1,45 +1,38 @@
 #!/bin/bash
 set -eux -o pipefail; shopt -s inherit_errexit
 
-typeset counter=0
-typeset maxWait=900
-
-while [[ ${counter} -lt ${maxWait} ]]; do
-  if oc wait --for=jsonpath='{.metadata.name}'=buildgpl configmap/buildgpl \
-      -n "${FA__SCALE__NAMESPACE}" --timeout=30s; then
-    break
-  fi
-  counter=$((counter + 30))
-done
-
-if [[ ${counter} -ge ${maxWait} ]]; then
-  typeset runningPods=0
-  runningPods=$(oc get pods -n "${FA__SCALE__NAMESPACE}" -l app.kubernetes.io/name=core --field-selector=status.phase=Running --no-headers | wc -l)
-  [[ "${runningPods}" -gt 0 ]] && exit 0
-  exit 1
+if ! (
+    oc -n "${FA__SCALE__NAMESPACE}" wait configmap/buildgpl \
+        --for create \
+        --timeout=900s
+); then
+    typeset kmmCrdExists=''
+    kmmCrdExists=$(oc get crd modules.kmm.sigs.x-k8s.io -o json 2>/dev/null | jq -r '.metadata.name // empty' || true)
+    [[ -n "${kmmCrdExists}" ]] && exit 0
+    false
 fi
 
-oc patch configmap buildgpl -n "${FA__SCALE__NAMESPACE}" --type=merge -p "$(cat <<EOF
+oc patch configmap buildgpl -n "${FA__SCALE__NAMESPACE}" --type=merge -p "$(cat <<'EOF'
 data:
   buildgpl: |
     #!/bin/sh
-    kerv=\$(uname -r)
+    kerv=$(uname -r)
 
     rsync -av /host/var/lib/firmware/lxtrace-* /usr/lpp/mmfs/bin/ || echo "Warning: No lxtrace files found"
 
-    touch /usr/lpp/mmfs/bin/lxtrace-\$kerv
-    chmod +x /usr/lpp/mmfs/bin/lxtrace-\$kerv
+    touch /usr/lpp/mmfs/bin/lxtrace-$kerv
+    chmod +x /usr/lpp/mmfs/bin/lxtrace-$kerv
 
-    mkdir -p /lib/modules/\$kerv/extra
-    echo "# This is a workaround to pass file validation on IBM container" > /lib/modules/\$kerv/extra/mmfslinux.ko
-    echo "# This is a workaround to pass file validation on IBM container" > /lib/modules/\$kerv/extra/tracedev.ko
+    mkdir -p /lib/modules/$kerv/extra
+    echo "# This is a workaround to pass file validation on IBM container" > /lib/modules/$kerv/extra/mmfslinux.ko
+    echo "# This is a workaround to pass file validation on IBM container" > /lib/modules/$kerv/extra/tracedev.ko
 
     exit 0
 EOF
 )"
 
 typeset daemonPods=0
-daemonPods=$(oc get pods -n "${FA__SCALE__NAMESPACE}" -l app.kubernetes.io/instance=ibm-spectrum-scale,app.kubernetes.io/name=core --no-headers | wc -l)
+daemonPods=$(oc get pods -n "${FA__SCALE__NAMESPACE}" -l app.kubernetes.io/instance=ibm-spectrum-scale,app.kubernetes.io/name=core -o json | jq '.items | length')
 
 if [[ "${daemonPods}" -gt 0 ]]; then
   oc delete pods -l app.kubernetes.io/instance=ibm-spectrum-scale,app.kubernetes.io/name=core \
