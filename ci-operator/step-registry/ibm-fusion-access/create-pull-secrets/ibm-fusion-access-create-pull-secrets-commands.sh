@@ -2,7 +2,6 @@
 set -eux -o pipefail; shopt -s inherit_errexit
 
 function CreateRegistryAuth () {
-  set -euxo pipefail; shopt -s inherit_errexit
   typeset ns="${1}"; (($#)) && shift
   typeset name="${1}"; (($#)) && shift
   typeset regHost="${1}"; (($#)) && shift
@@ -24,10 +23,10 @@ function CreateRegistryAuth () {
 }
 
 function CreateRegistryAuthFromFile () {
-  set -euxo pipefail; shopt -s inherit_errexit
   typeset ns="${1}"; (($#)) && shift
   typeset name="${1}"; (($#)) && shift
   typeset regHost="${1}"; (($#)) && shift
+  # authFile content is expected to be BASE64-encoded
   typeset authFile="${1}"; (($#)) && shift
 
   oc -n "${ns}" create secret generic "${name}" \
@@ -44,7 +43,6 @@ function CreateRegistryAuthFromFile () {
 }
 
 function PatchDefaultSAImagePullSecrets () {
-  set -euxo pipefail; shopt -s inherit_errexit
   if oc get secret fusion-pullsecret-extra -n "${FA__NAMESPACE}"; then
     oc patch serviceaccount default -n "${FA__NAMESPACE}" \
       -p '{"imagePullSecrets":[{"name":"fusion-pullsecret"},{"name":"fusion-pullsecret-extra"}]}'
