@@ -1,45 +1,31 @@
 #!/bin/bash
+set -eux -o pipefail; shopt -s inherit_errexit
 
-set -o nounset
-set -o errexit
-set -o pipefail
+typeset faNamespace="${FA__NAMESPACE:-ibm-fusion-access}"
+typeset faCatalogSourceImage="${FA__CATALOG_SOURCE_IMAGE:-quay.io/openshift-storage-scale/openshift-fusion-access-catalog:stable}"
+typeset faOperatorChannel="${FA__OPERATOR_CHANNEL:-alpha}"
 
-echo "🔧 Installing Fusion Access Operator..."
-
-FUSION_ACCESS_NAMESPACE="${FUSION_ACCESS_NAMESPACE:-ibm-fusion-access}"
-CATALOG_SOURCE_IMAGE="${CATALOG_SOURCE_IMAGE:-quay.io/openshift-storage-scale/openshift-fusion-access-catalog:stable}"
-OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-alpha}"
-
-echo "Namespace: ${FUSION_ACCESS_NAMESPACE}"
-echo "Catalog Source Image: ${CATALOG_SOURCE_IMAGE}"
-echo "Operator Channel: ${OPERATOR_CHANNEL}"
-
-if oc get namespace "${FUSION_ACCESS_NAMESPACE}" >/dev/null 2>&1; then
-  echo "✅ Namespace ${FUSION_ACCESS_NAMESPACE} already exists"
-else
-  echo "Creating namespace ${FUSION_ACCESS_NAMESPACE}..."
-  oc create namespace "${FUSION_ACCESS_NAMESPACE}"
+oc create namespace "${faNamespace}" --dry-run=client -o json --save-config | oc apply -f -
+if ! oc wait --for=create "namespace/${faNamespace}" --timeout=60s; then
+  oc get namespace "${faNamespace}" -o yaml --ignore-not-found
+  exit 1
 fi
 
-echo "Waiting for namespace to be ready..."
-oc wait --for=jsonpath='{.status.phase}'=Active namespace/${FUSION_ACCESS_NAMESPACE} --timeout=60s
-
-echo "Creating OperatorGroup..."
-oc apply -f=- <<EOF
+{
+  oc create -f - --dry-run=client -o yaml --save-config
+} 0<<YAML | oc apply -f -
 apiVersion: operators.coreos.com/v1
 kind: OperatorGroup
 metadata:
   name: storage-scale-operator-group
-  namespace: ${FUSION_ACCESS_NAMESPACE}
+  namespace: ${faNamespace}
 spec:
   upgradeStrategy: Default
-EOF
+YAML
 
-echo "Waiting for OperatorGroup to be ready..."
-oc wait --for=jsonpath='{.metadata.name}'=storage-scale-operator-group operatorgroup/storage-scale-operator-group -n ${FUSION_ACCESS_NAMESPACE} --timeout=300s
-
-echo "Creating CatalogSource..."
-oc apply -f=- <<EOF
+{
+  oc create -f - --dry-run=client -o yaml --save-config
+} 0<<YAML | oc apply -f -
 apiVersion: operators.coreos.com/v1alpha1
 kind: CatalogSource
 metadata:
@@ -47,39 +33,40 @@ metadata:
   namespace: openshift-marketplace
 spec:
   displayName: Test Storage Scale Operator
+  image: ${faCatalogSourceImage}
   sourceType: grpc
-  image: "${CATALOG_SOURCE_IMAGE}"
-EOF
+YAML
 
-echo "Waiting for CatalogSource to be ready..."
-oc wait --for=jsonpath='{.metadata.name}'=test-fusion-access-operator catalogsource/test-fusion-access-operator -n openshift-marketplace --timeout=300s
-
-echo "Creating Subscription..."
-oc apply -f=- <<EOF
+{
+  oc create -f - --dry-run=client -o yaml --save-config
+} 0<<YAML | oc apply -f -
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
 metadata:
   name: openshift-fusion-access-operator
-  namespace: ${FUSION_ACCESS_NAMESPACE}
+  namespace: ${faNamespace}
 spec:
-  channel: ${OPERATOR_CHANNEL}
+  channel: ${faOperatorChannel}
   installPlanApproval: Automatic
   name: openshift-fusion-access-operator
   source: test-fusion-access-operator
   sourceNamespace: openshift-marketplace
-EOF
+YAML
 
-echo "Waiting for Subscription to be ready..."
-oc wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/openshift-fusion-access-operator -n ${FUSION_ACCESS_NAMESPACE} --timeout=600s
-
-echo "Waiting for ClusterServiceVersion to be installed and ready..."
-CSV_NAME=$(oc get subscription openshift-fusion-access-operator -n ${FUSION_ACCESS_NAMESPACE} -o jsonpath='{.status.installedCSV}')
-if [[ -n "${CSV_NAME}" ]]; then
-  echo "Waiting for CSV ${CSV_NAME} to be ready..."
-  oc wait --for=jsonpath='{.status.phase}'=Succeeded csv/${CSV_NAME} -n ${FUSION_ACCESS_NAMESPACE} --timeout=600s
-else
-  echo "⚠️  CSV name not found in subscription status, waiting for any CSV to be ready..."
-  oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -l operators.coreos.com/openshift-fusion-access-operator.${FUSION_ACCESS_NAMESPACE} -n ${FUSION_ACCESS_NAMESPACE} --timeout=600s
+if ! oc wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/openshift-fusion-access-operator -n "${faNamespace}" --timeout=600s; then
+  oc get subscription openshift-fusion-access-operator -n "${faNamespace}" -o yaml --ignore-not-found
+  exit 1
 fi
 
-echo "✅ Fusion Access Operator installation completed!"
+typeset csvName=''
+csvName="$(oc get subscription openshift-fusion-access-operator -n "${faNamespace}" -o jsonpath='{.status.installedCSV}')"
+if [[ -z "${csvName}" ]]; then
+  : "installedCSV is empty"
+  exit 1
+fi
+if ! oc wait --for=jsonpath='{.status.phase}'=Succeeded "csv/${csvName}" -n "${faNamespace}" --timeout=600s; then
+  oc get csv "${csvName}" -n "${faNamespace}" -o yaml --ignore-not-found
+  exit 1
+fi
+
+true

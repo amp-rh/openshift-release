@@ -1,117 +1,96 @@
 #!/bin/bash
-set -o nounset
-set -o errexit
-set -o pipefail
+set -eux -o pipefail; shopt -s inherit_errexit
 
-# JUnit XML test results configuration
-ARTIFACT_DIR="${ARTIFACT_DIR:-/tmp/artifacts}"
-JUNIT_RESULTS_FILE="${ARTIFACT_DIR}/junit_check_crds_tests.xml"
-TEST_START_TIME=$SECONDS
-TESTS_TOTAL=0
-TESTS_FAILED=0
-TESTS_PASSED=0
-TEST_CASES=""
+typeset junitResultsFile="${ARTIFACT_DIR}/junit_check_crds_tests.xml"
+typeset -i testStartTime="${SECONDS}"
+typeset -i testsTotal=0
+typeset -i testsFailed=0
+typeset testCases=''
 
-# Function to add test result to JUnit XML
-add_test_result() {
-  local test_name="$1"
-  local test_status="$2"  # "passed" or "failed"
-  local test_duration="$3"
-  local test_message="${4:-}"
-  local test_classname="${5:-CheckCRDsTests}"
-  
-  TESTS_TOTAL=$((TESTS_TOTAL + 1))
-  
-  if [[ "$test_status" == "passed" ]]; then
-    TESTS_PASSED=$((TESTS_PASSED + 1))
-    TEST_CASES="${TEST_CASES}
-    <testcase name=\"${test_name}\" classname=\"${test_classname}\" time=\"${test_duration}\"/>"
+function AddTestResult () {
+  typeset testName="${1}"; (($#)) && shift
+  typeset testStatus="${1}"; (($#)) && shift
+  typeset testDuration="${1}"; (($#)) && shift
+  typeset testMessage="${1:-}"; (($#)) && shift
+  typeset testClassName="${1:-CheckCRDsTests}"; (($#)) && shift
+
+  testsTotal=$((testsTotal + 1))
+
+  if [[ "${testStatus}" == "passed" ]]; then
+    testCases="${testCases}
+    <testcase name=\"${testName}\" classname=\"${testClassName}\" time=\"${testDuration}\"/>"
   else
-    TESTS_FAILED=$((TESTS_FAILED + 1))
-    TEST_CASES="${TEST_CASES}
-    <testcase name=\"${test_name}\" classname=\"${test_classname}\" time=\"${test_duration}\">
-      <failure message=\"Test failed\">${test_message}</failure>
+    testsFailed=$((testsFailed + 1))
+    testCases="${testCases}
+    <testcase name=\"${testName}\" classname=\"${testClassName}\" time=\"${testDuration}\">
+      <failure message=\"Test failed\">${testMessage}</failure>
     </testcase>"
   fi
+
+  true
 }
 
-function installYQIfNotExists() {
-    # Install yq manually if not found in image
-    echo "Checking if yq exists"
-    cmd_yq="$(yq --version 2>/dev/null || true)"
-    if [ -n "$cmd_yq" ]; then
-        echo "yq version: $cmd_yq"
-    else
-        echo "Installing yq"
-        mkdir -p /tmp/bin
-        export PATH=$PATH:/tmp/bin/
-        curl -L "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_$(uname -m | sed 's/aarch64/arm64/;s/x86_64/amd64/')" \
-         -o /tmp/bin/yq && chmod +x /tmp/bin/yq
-    fi
+function InstallYQIfNotExists () {
+  if ! command -v yq; then
+    mkdir -p /tmp/bin
+    export PATH="${PATH}:/tmp/bin"
+    curl -L "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_$(uname -m | sed 's/aarch64/arm64/;s/x86_64/amd64/')" \
+      -o /tmp/bin/yq && chmod +x /tmp/bin/yq
+  fi
+
+  true
 }
 
-function mapTestsForComponentReadiness() {
-    [[ ${MAP_TESTS:-false} != "true" ]] && return
+function MapTestsForComponentReadiness () {
+  [[ "${MAP_TESTS:-false}" != "true" ]] && return
 
-    results_file="${1}"
-    echo "Patching Tests Result File: ${results_file}"
-    if [ -f "${results_file}" ]; then
-        installYQIfNotExists
-        export REPORTPORTAL_CMP
-        echo "Mapping Test Suite Name To: ${REPORTPORTAL_CMP}"
-        yq eval -px -ox -iI0 '.testsuites.testsuite.+@name=env(REPORTPORTAL_CMP)' $results_file
-    fi
-    true
+  typeset resultsFile="${1}"
+  if [[ -f "${resultsFile}" ]]; then
+    InstallYQIfNotExists
+    export REPORTPORTAL_CMP="${REPORTPORTAL_CMP:-}"
+    yq eval -px -ox -iI0 '.testsuites.testsuite.+@name=env(REPORTPORTAL_CMP)' "${resultsFile}"
+  fi
+
+  true
 }
 
-# Function to generate JUnit XML report
-generate_junit_xml() {
-  local total_duration=$((SECONDS - TEST_START_TIME))
+function GenerateJunitXml () {
+  typeset -i totalDuration=$((SECONDS - testStartTime))
   
-  cat > "${JUNIT_RESULTS_FILE}" <<EOF
+  cat > "${junitResultsFile}" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <testsuites>
-  <testsuite name="Check CRDs Tests" tests="${TESTS_TOTAL}" failures="${TESTS_FAILED}" errors="0" time="${total_duration}">
-${TEST_CASES}
+  <testsuite name="Check CRDs Tests" tests="${testsTotal}" failures="${testsFailed}" errors="0" time="${totalDuration}">
+${testCases}
   </testsuite>
 </testsuites>
 EOF
-  
-  echo ""
-  echo "📊 Test Results Summary:"
-  echo "  Total Tests: ${TESTS_TOTAL}"
-  echo "  Passed: ${TESTS_PASSED}"
-  echo "  Failed: ${TESTS_FAILED}"
-  echo "  Duration: ${total_duration}s"
-  echo "  Results File: ${JUNIT_RESULTS_FILE}"
-  
-  mapTestsForComponentReadiness "${JUNIT_RESULTS_FILE}"
 
-  # Copy to SHARED_DIR for data router reporter (if available)
-  if [[ -n "${SHARED_DIR:-}" ]] && [[ -d "${SHARED_DIR}" ]]; then
-    cp "${JUNIT_RESULTS_FILE}" "${SHARED_DIR}/$(basename ${JUNIT_RESULTS_FILE})"
-    echo "  ✅ Results copied to SHARED_DIR"
+  MapTestsForComponentReadiness "${JUNIT_RESULTS_FILE:-${junitResultsFile}}"
+
+  if [[ -n "${SHARED_DIR}" ]] && [[ -d "${SHARED_DIR}" ]]; then
+    cp "${junitResultsFile}" "${SHARED_DIR}/$(basename "${junitResultsFile}")"
   fi
+
+  true
 }
 
-# Trap to ensure JUnit XML is generated even on failure
-trap generate_junit_xml EXIT
-
-echo "🔍 Waiting for IBM Storage Scale CRDs..."
+trap '{( GenerateJunitXml; true )}' EXIT
 
 # Test 1: Wait for CRDs to be established
-test_start=$SECONDS
-test_status="failed"
-test_message=""
+typeset -i testStart="${SECONDS}"
+typeset testStatus='failed'
+typeset testMessage=''
 
 # The FusionAccess operator installs the IBM Storage Scale operator which creates these CRDs
 if oc wait --for=condition=Established crd/clusters.scale.spectrum.ibm.com --timeout=600s; then
-  echo "✅ IBM Storage Scale CRDs are ready"
-  test_status="passed"
+  testStatus="passed"
 else
-  echo "❌ CRDs not established within timeout"
-  test_message="CRDs not established within 600s timeout"
+  oc get crd clusters.scale.spectrum.ibm.com -o yaml --ignore-not-found
+  testMessage="CRDs not established within 600s timeout"
 fi
 
-test_duration=$((SECONDS - test_start))
-add_test_result "test_storage_scale_crds_established" "$test_status" "$test_duration" "$test_message"
+typeset -i testDuration=$((SECONDS - testStart))
+AddTestResult "test_storage_scale_crds_established" "${testStatus}" "${testDuration}" "${testMessage}"
+
+true

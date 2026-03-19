@@ -1,54 +1,72 @@
 #!/bin/bash
-set -o nounset
-set -o errexit
-set -o pipefail
+set -eux -o pipefail; shopt -s inherit_errexit
 
-STORAGE_SCALE_NAMESPACE="${STORAGE_SCALE_NAMESPACE:-ibm-spectrum-scale}"
+typeset FA__SCALE__NAMESPACE="${FA__SCALE__NAMESPACE:-ibm-spectrum-scale}"
+typeset FA__LOCALDISK_NAME="${FA__LOCALDISK_NAME:-shared-san-disk}"
 
-echo "💾 Creating IBM Storage Scale LocalDisk resources..."
+typeset firstWorker=''
+firstWorker=$(oc get nodes -l node-role.kubernetes.io/worker= -o jsonpath-as-json='{.items[*].metadata.name}' | jq -r 'first(.[]) // empty')
 
-# Get first worker node for LocalDisk creation
-# Use jsonpath to avoid SIGPIPE issues with pipefail
-FIRST_WORKER=$(oc get nodes -l node-role.kubernetes.io/worker -o jsonpath='{.items[0].metadata.name}')
-
-# Validate that we have a worker node
-if [[ -z "${FIRST_WORKER}" ]]; then
-  echo "❌ ERROR: No worker nodes found"
+if [[ -z "${firstWorker}" ]]; then
   oc get nodes
   exit 1
 fi
 
-echo "✅ Using worker node: ${FIRST_WORKER}"
+typeset byIdPath=''
+if [[ -f "${SHARED_DIR}/ebs-device-path" ]]; then
+  byIdPath=$(cat "${SHARED_DIR}/ebs-device-path")
+elif [[ -f "${SHARED_DIR}/multiattach-volume-id" ]]; then
+  typeset volumeIdClean=''
+  volumeIdClean=$(cat "${SHARED_DIR}/multiattach-volume-id" | tr -d '-')
+  byIdPath="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${volumeIdClean}"
+else
+  ls -la "${SHARED_DIR}/"
+  exit 1
+fi
 
-# Create LocalDisk resources for EBS volumes (device names vary by instance type)
-DEVICES=("nvme2n1" "nvme3n1")
-DISK_COUNT=1
+typeset devicePath=''
+if devicePath="$(oc debug -n default node/"${firstWorker}" --quiet -- \
+  chroot /host readlink -f "${byIdPath}" 2>&1 \
+  | sed -e '/Starting/d' -e '/Removing/d' -e '/To use/d')"; then
+  :
+fi
+if [[ -z "${devicePath}" || "${devicePath}" != /dev/* ]]; then
+  oc debug -n default node/"${firstWorker}" --quiet -- \
+    chroot /host ls -la "${byIdPath}" || :
+  exit 1
+fi
 
-for device in "${DEVICES[@]}"; do
-  LOCALDISK_NAME="shared-ebs-disk-${DISK_COUNT}"
-  
-  oc apply -f=- <<EOF
+{
+  oc create -f - --dry-run=client -o json --save-config |
+  jq -c \
+    --arg name "${FA__LOCALDISK_NAME}" \
+    --arg ns "${FA__SCALE__NAMESPACE}" \
+    --arg device "${devicePath}" \
+    --arg node "${firstWorker}" \
+    '
+      .metadata.name = $name |
+      .metadata.namespace = $ns |
+      .spec.device = $device |
+      .spec.node = $node
+    '
+} 0<<'YAML' | oc apply -f -
 apiVersion: scale.spectrum.ibm.com/v1beta1
 kind: LocalDisk
-metadata:
-  name: ${LOCALDISK_NAME}
-  namespace: ${STORAGE_SCALE_NAMESPACE}
+metadata: {}
 spec:
-  device: /dev/${device}
-  node: ${FIRST_WORKER}
   nodeConnectionSelector:
     matchExpressions:
     - key: node-role.kubernetes.io/worker
       operator: Exists
   existingDataSkipVerify: true
-EOF
-  
-  oc wait --for=jsonpath='{.metadata.name}'=${LOCALDISK_NAME} localdisk/${LOCALDISK_NAME} -n ${STORAGE_SCALE_NAMESPACE} --timeout=300s
-  echo "✅ LocalDisk ${LOCALDISK_NAME} created"
-  
-  ((DISK_COUNT++))
-done
+YAML
 
-echo "✅ Created ${#DEVICES[@]} LocalDisk resources"
-oc get localdisk -n ${STORAGE_SCALE_NAMESPACE}
+if ! oc wait --for=condition=Ready \
+    localdisk/"${FA__LOCALDISK_NAME}" -n "${FA__SCALE__NAMESPACE}" --timeout=300s; then
+  oc debug -n default node/"${firstWorker}" --quiet -- chroot /host ls -la "${devicePath}" || :
+  oc debug -n default node/"${firstWorker}" --quiet -- chroot /host ls -la /dev/disk/by-id/ | sed -n '/[nN][vV][mM][eE]/p'
+  oc get localdisk "${FA__LOCALDISK_NAME}" -n "${FA__SCALE__NAMESPACE}" -o yaml --ignore-not-found
+  exit 1
+fi
 
+true

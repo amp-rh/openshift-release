@@ -1,163 +1,154 @@
 #!/bin/bash
-set -o nounset
-set -o errexit
-set -o pipefail
+set -eux -o pipefail; shopt -s inherit_errexit
 
-STORAGE_SCALE_NAMESPACE="${STORAGE_SCALE_NAMESPACE:-ibm-spectrum-scale}"
-STORAGE_SCALE_CLUSTER_NAME="${STORAGE_SCALE_CLUSTER_NAME:-ibm-spectrum-scale}"
-STORAGE_SCALE_CLIENT_CPU="${STORAGE_SCALE_CLIENT_CPU:-2}"
-STORAGE_SCALE_CLIENT_MEMORY="${STORAGE_SCALE_CLIENT_MEMORY:-4Gi}"
-STORAGE_SCALE_STORAGE_CPU="${STORAGE_SCALE_STORAGE_CPU:-2}"
-STORAGE_SCALE_STORAGE_MEMORY="${STORAGE_SCALE_STORAGE_MEMORY:-8Gi}"
+typeset FA__SCALE__NAMESPACE="${FA__SCALE__NAMESPACE:-ibm-spectrum-scale}"
+typeset FA__SCALE__CLUSTER_NAME="${FA__SCALE__CLUSTER_NAME:-ibm-spectrum-scale}"
+typeset FA__SCALE__CLIENT_CPU="${FA__SCALE__CLIENT_CPU:-2}"
+typeset FA__SCALE__CLIENT_MEMORY="${FA__SCALE__CLIENT_MEMORY:-4Gi}"
+typeset FA__SCALE__STORAGE_CPU="${FA__SCALE__STORAGE_CPU:-2}"
+typeset FA__SCALE__STORAGE_MEMORY="${FA__SCALE__STORAGE_MEMORY:-8Gi}"
 
-# JUnit XML test results configuration
-ARTIFACT_DIR="${ARTIFACT_DIR:-/tmp/artifacts}"
-JUNIT_RESULTS_FILE="${ARTIFACT_DIR}/junit_create_cluster_tests.xml"
-TEST_START_TIME=$(date +%s)
-TESTS_TOTAL=0
-TESTS_FAILED=0
-TESTS_PASSED=0
-TEST_CASES=""
+typeset junitResultsFile="${ARTIFACT_DIR}/junit_create_cluster_tests.xml"
+typeset -i testStartTime=0
+testStartTime=$(date +%s)
+typeset -i testsTotal=0
+typeset -i testsFailed=0
+typeset testCases=''
 
-# Function to add test result to JUnit XML
-add_test_result() {
-  local test_name="$1"
-  local test_status="$2"  # "passed" or "failed"
-  local test_duration="$3"
-  local test_message="${4:-}"
-  local test_classname="${5:-ClusterCreationTests}"
+function AddTestResult () {
+  typeset testName="${1}"; (($#)) && shift
+  typeset testStatus="${1}"; (($#)) && shift
+  typeset testDuration="${1}"; (($#)) && shift
+  typeset testMessage="${1:-}"; (($#)) && shift
+  typeset testClassName="${1:-ClusterCreationTests}"; (($#)) && shift
   
-  TESTS_TOTAL=$((TESTS_TOTAL + 1))
+  testsTotal=$((testsTotal + 1))
   
-  if [[ "$test_status" == "passed" ]]; then
-    TESTS_PASSED=$((TESTS_PASSED + 1))
-    TEST_CASES="${TEST_CASES}
-    <testcase name=\"${test_name}\" classname=\"${test_classname}\" time=\"${test_duration}\"/>"
+  if [[ "${testStatus}" == "passed" ]]; then
+    testCases="${testCases}
+    <testcase name=\"${testName}\" classname=\"${testClassName}\" time=\"${testDuration}\"/>"
   else
-    TESTS_FAILED=$((TESTS_FAILED + 1))
-    TEST_CASES="${TEST_CASES}
-    <testcase name=\"${test_name}\" classname=\"${test_classname}\" time=\"${test_duration}\">
-      <failure message=\"Test failed\">${test_message}</failure>
+    testsFailed=$((testsFailed + 1))
+    testCases="${testCases}
+    <testcase name=\"${testName}\" classname=\"${testClassName}\" time=\"${testDuration}\">
+      <failure message=\"Test failed\">${testMessage}</failure>
     </testcase>"
   fi
+
+  true
 }
 
-function installYQIfNotExists() {
-    # Install yq manually if not found in image
-    echo "Checking if yq exists"
-    cmd_yq="$(yq --version 2>/dev/null || true)"
-    if [ -n "$cmd_yq" ]; then
-        echo "yq version: $cmd_yq"
+function InstallYQIfNotExists () {
+    if command -v yq; then
+        yq --version
     else
-        echo "Installing yq"
         mkdir -p /tmp/bin
-        export PATH=$PATH:/tmp/bin/
+        export PATH="${PATH}:/tmp/bin/"
         curl -L "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_$(uname -m | sed 's/aarch64/arm64/;s/x86_64/amd64/')" \
-         -o /tmp/bin/yq && chmod +x /tmp/bin/yq
+            -o /tmp/bin/yq
+        chmod +x /tmp/bin/yq
     fi
-}
 
-function mapTestsForComponentReadiness() {
-    [[ ${MAP_TESTS:-false} != "true" ]] && return
-
-    results_file="${1}"
-    echo "Patching Tests Result File: ${results_file}"
-    if [ -f "${results_file}" ]; then
-        installYQIfNotExists
-        export REPORTPORTAL_CMP
-        echo "Mapping Test Suite Name To: ${REPORTPORTAL_CMP}"
-        yq eval -px -ox -iI0 '.testsuites.testsuite.+@name=env(REPORTPORTAL_CMP)' $results_file
-    fi
     true
 }
 
-# Function to generate JUnit XML report
-generate_junit_xml() {
-  local total_duration=$(($(date +%s) - TEST_START_TIME))
+function MapTestsForComponentReadiness () {
+    [[ "${MAP_TESTS:-false}" != "true" ]] && return
+
+    typeset resultsFile="${1}"
+    if [[ -f "${resultsFile}" ]]; then
+        InstallYQIfNotExists
+        export REPORTPORTAL_CMP="${REPORTPORTAL_CMP:-}"
+        yq eval -px -ox -iI0 '.testsuites.testsuite.+@name=env(REPORTPORTAL_CMP)' "${resultsFile}"
+    fi
+
+    true
+}
+
+function GenerateJunitXml () {
+  typeset totalDuration=0
+  totalDuration=$(($(date +%s) - testStartTime))
   
-  cat > "${JUNIT_RESULTS_FILE}" <<EOF
+  cat > "${junitResultsFile}" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <testsuites>
-  <testsuite name="Create Cluster Tests" tests="${TESTS_TOTAL}" failures="${TESTS_FAILED}" errors="0" time="${total_duration}">
-${TEST_CASES}
+  <testsuite name="Create Cluster Tests" tests="${testsTotal}" failures="${testsFailed}" errors="0" time="${totalDuration}">
+${testCases}
   </testsuite>
 </testsuites>
 EOF
-  
-  echo ""
-  echo "📊 Test Results Summary:"
-  echo "  Total Tests: ${TESTS_TOTAL}"
-  echo "  Passed: ${TESTS_PASSED}"
-  echo "  Failed: ${TESTS_FAILED}"
-  echo "  Duration: ${total_duration}s"
-  echo "  Results File: ${JUNIT_RESULTS_FILE}"
-  
-  mapTestsForComponentReadiness "${JUNIT_RESULTS_FILE}"
+
+  MapTestsForComponentReadiness "${junitResultsFile}"
 
   # Copy to SHARED_DIR for data router reporter (if available)
-  if [[ -n "${SHARED_DIR:-}" ]] && [[ -d "${SHARED_DIR}" ]]; then
-    cp "${JUNIT_RESULTS_FILE}" "${SHARED_DIR}/$(basename ${JUNIT_RESULTS_FILE})"
-    echo "  ✅ Results copied to SHARED_DIR"
+  if [[ -n "${SHARED_DIR}" ]] && [[ -d "${SHARED_DIR}" ]]; then
+    cp "${junitResultsFile}" "${SHARED_DIR}/$(basename "${junitResultsFile}")"
   fi
-  
-  # Exit with failure if any tests failed
-  if [[ ${TESTS_FAILED} -gt 0 ]]; then
-    echo ""
-    echo "❌ Test suite failed: ${TESTS_FAILED} test(s) failed"
+
+  if [[ "${testsFailed}" -gt 0 ]]; then
     exit 1
   fi
+
+  true
 }
 
 # Trap to ensure JUnit XML is generated even on failure
-trap generate_junit_xml EXIT
+trap '{( GenerateJunitXml; true ); }' EXIT
 
-echo "🏗️  Creating IBM Storage Scale Cluster..."
+typeset -i test1Start=0
+test1Start=$(date +%s)
+typeset test1Status="passed"
+typeset test1Message=''
 
-# Test 1: Check if cluster already exists (idempotent)
-echo ""
-echo "🧪 Test 1: Check cluster pre-existence..."
-TEST1_START=$(date +%s)
-TEST1_STATUS="passed"
-TEST1_MESSAGE=""
-
-if oc get cluster "${STORAGE_SCALE_CLUSTER_NAME}" -n "${STORAGE_SCALE_NAMESPACE}" >/dev/null 2>&1; then
-  echo "  ✅ Cluster already exists (idempotent)"
-  CLUSTER_EXISTS=true
+typeset clusterJson=''
+typeset clusterExists=false
+if clusterJson="$(oc get cluster "${FA__SCALE__CLUSTER_NAME}" -n "${FA__SCALE__NAMESPACE}" -o json)"; then
+  clusterExists=true
 else
-  echo "  ℹ️  Cluster does not exist, will create"
-  CLUSTER_EXISTS=false
+  clusterJson=''
 fi
 
-TEST1_DURATION=$(($(date +%s) - TEST1_START))
-add_test_result "test_cluster_idempotency_check" "$TEST1_STATUS" "$TEST1_DURATION" "$TEST1_MESSAGE"
+typeset -i test1Duration=0
+test1Duration=$(($(date +%s) - test1Start))
+AddTestResult "test_cluster_idempotency_check" "${test1Status}" "${test1Duration}" "${test1Message}"
 
-# Test 2: Create Cluster resource (without hardcoded device paths)
-if [[ "$CLUSTER_EXISTS" == "false" ]]; then
-  echo ""
-  echo "🧪 Test 2: Create Cluster resource..."
-  TEST2_START=$(date +%s)
-  TEST2_STATUS="failed"
-  TEST2_MESSAGE=""
+if [[ "${clusterExists}" == "false" ]]; then
+  typeset -i test2Start=0
+  test2Start=$(date +%s)
+  typeset test2Status="failed"
+  typeset test2Message=''
   
-  # Determine quorum configuration based on worker count
-  WORKER_COUNT=$(oc get nodes -l node-role.kubernetes.io/worker --no-headers | wc -l)
-  
-  if [[ $WORKER_COUNT -ge 3 ]]; then
-    QUORUM_CONFIG="quorum:
-    autoAssign: true"
-  else
-    echo "  ⚠️  Only $WORKER_COUNT worker nodes (3 recommended for quorum)"
-    QUORUM_CONFIG=""
-  fi
-  
-  # Create cluster WITHOUT hardcoded device paths
-  # Let the operator discover devices via LocalVolumeDiscovery or use Filesystem's disk refs
-  if cat <<EOF | oc apply -f -
+  typeset -i workerCount=0
+  workerCount=$(
+    oc get nodes \
+      -l node-role.kubernetes.io/worker= \
+      -o jsonpath-as-json='{.items[*].metadata.name}' |
+    jq 'length'
+  )
+
+  if {
+    oc create -f - --dry-run=client -o json --save-config |
+    jq \
+      --arg ns "${FA__SCALE__NAMESPACE}" \
+      --arg name "${FA__SCALE__CLUSTER_NAME}" \
+      --arg clientCpu "${FA__SCALE__CLIENT_CPU}" \
+      --arg clientMem "${FA__SCALE__CLIENT_MEMORY}" \
+      --arg storageCpu "${FA__SCALE__STORAGE_CPU}" \
+      --arg storageMem "${FA__SCALE__STORAGE_MEMORY}" \
+      --argjson quorum "$(( workerCount >= 3 ? 1 : 0 ))" \
+      '
+        .metadata.name = $name |
+        .metadata.namespace = $ns |
+        .spec.daemon.roles[0].resources = { cpu: $clientCpu, memory: $clientMem } |
+        .spec.daemon.roles[1].resources = { cpu: $storageCpu, memory: $storageMem } |
+        if $quorum == 0 then del(.spec.quorum) else . end
+      '
+  } 0<<'SKELETON' | oc apply -f -
 apiVersion: scale.spectrum.ibm.com/v1beta1
 kind: Cluster
 metadata:
-  name: ${STORAGE_SCALE_CLUSTER_NAME}
-  namespace: ${STORAGE_SCALE_NAMESPACE}
+  name: placeholder
+  namespace: placeholder
 spec:
   license:
     accept: true
@@ -169,91 +160,87 @@ spec:
     nodeSelector:
       scale.spectrum.ibm.com/role: storage
     nsdDevicesConfig:
-      localDevicePaths:
-      - devicePath: /dev/disk/by-id/*
-        deviceType: generic
+      bypassDiscovery: false
     clusterProfile:
+      cloudEnv: general
       controlSetxattrImmutableSELinux: "yes"
       enforceFilesetQuotaOnRoot: "yes"
       ignorePrefetchLUNCount: "yes"
+      ignoreReplicaSpaceOnStat: "yes"
+      ignoreReplicationForQuota: "yes"
+      ignoreReplicationOnStatfs: "yes"
       initPrefetchBuffers: "128"
       maxblocksize: 16M
       prefetchPct: "25"
       prefetchTimeout: "30"
+      readReplicaPolicy: local
+      traceGenSubDir: /var/mmfs/tmp/traces
+      tscCmdPortRange: 60000-61000
+    update:
+      paused: false
     roles:
     - name: client
       resources:
-        cpu: "${STORAGE_SCALE_CLIENT_CPU}"
-        memory: ${STORAGE_SCALE_CLIENT_MEMORY}
+        cpu: ""
+        memory: ""
     - name: storage
       resources:
-        cpu: "${STORAGE_SCALE_STORAGE_CPU}"
-        memory: ${STORAGE_SCALE_STORAGE_MEMORY}
-  ${QUORUM_CONFIG}
-EOF
+        cpu: ""
+        memory: ""
+  gui:
+    enableSessionIPCheck: true
+  quorum:
+    autoAssign: true
+SKELETON
   then
-    echo "  ✅ Cluster resource created successfully"
-    TEST2_STATUS="passed"
+    test2Status="passed"
   else
-    echo "  ❌ Failed to create Cluster resource"
-    TEST2_MESSAGE="Failed to create Cluster resource via oc apply"
+    test2Message="Failed to create Cluster resource via oc apply"
   fi
   
-  TEST2_DURATION=$(($(date +%s) - TEST2_START))
-  add_test_result "test_cluster_creation" "$TEST2_STATUS" "$TEST2_DURATION" "$TEST2_MESSAGE"
-else
-  echo ""
-  echo "  ℹ️  Skipping Cluster creation (already exists)"
+  typeset -i test2Duration=0
+  test2Duration=$(($(date +%s) - test2Start))
+  AddTestResult "test_cluster_creation" "${test2Status}" "${test2Duration}" "${test2Message}"
+
+  clusterJson=''
+  if ! clusterJson="$(oc get cluster "${FA__SCALE__CLUSTER_NAME}" -n "${FA__SCALE__NAMESPACE}" -o json)"; then
+    clusterJson=''
+  fi
 fi
 
-# Test 3: Verify Cluster resource exists
-echo ""
-echo "🧪 Test 3: Verify Cluster resource..."
-TEST3_START=$(date +%s)
-TEST3_STATUS="failed"
-TEST3_MESSAGE=""
+typeset -i test3Start=0
+test3Start=$(date +%s)
+typeset test3Status="failed"
+typeset test3Message=''
 
-if oc get cluster "${STORAGE_SCALE_CLUSTER_NAME}" -n "${STORAGE_SCALE_NAMESPACE}" >/dev/null 2>&1; then
-  echo "  ✅ Cluster resource verified"
-  TEST3_STATUS="passed"
+if [[ -n "${clusterJson}" ]]; then
+  test3Status="passed"
 else
-  echo "  ❌ Cluster resource not found after creation"
-  TEST3_MESSAGE="Cluster ${STORAGE_SCALE_CLUSTER_NAME} not found in namespace ${STORAGE_SCALE_NAMESPACE}"
+  test3Message="Cluster ${FA__SCALE__CLUSTER_NAME} not found in namespace ${FA__SCALE__NAMESPACE}"
 fi
 
-TEST3_DURATION=$(($(date +%s) - TEST3_START))
-add_test_result "test_cluster_exists" "$TEST3_STATUS" "$TEST3_DURATION" "$TEST3_MESSAGE"
+typeset -i test3Duration=0
+test3Duration=$(($(date +%s) - test3Start))
+AddTestResult "test_cluster_exists" "${test3Status}" "${test3Duration}" "${test3Message}"
 
-# Test 4: Verify Cluster has correct device pattern
-echo ""
-echo "🧪 Test 4: Verify Cluster device configuration..."
-TEST4_START=$(date +%s)
-TEST4_STATUS="failed"
-TEST4_MESSAGE=""
+typeset -i test4Start=0
+test4Start=$(date +%s)
+typeset test4Status="failed"
+typeset test4Message=''
 
-DEVICE_PATH=$(oc get cluster "${STORAGE_SCALE_CLUSTER_NAME}" -n "${STORAGE_SCALE_NAMESPACE}" \
-  -o jsonpath='{.spec.daemon.nsdDevicesConfig.localDevicePaths[0].devicePath}' 2>/dev/null || echo "")
-
-if [[ "$DEVICE_PATH" == "/dev/disk/by-id/*" ]]; then
-  echo "  ✅ Cluster configured with /dev/disk/by-id/* device pattern"
-  TEST4_STATUS="passed"
-elif [[ -n "$DEVICE_PATH" ]]; then
-  echo "  ⚠️  Cluster has device path: ${DEVICE_PATH}"
-  TEST4_MESSAGE="Cluster has unexpected device path: ${DEVICE_PATH} (expected: /dev/disk/by-id/*)"
-else
-  echo "  ⚠️  Cluster has no nsdDevicesConfig"
-  TEST4_MESSAGE="Cluster missing nsdDevicesConfig.localDevicePaths"
+typeset bypassDiscovery=''
+if [[ -n "${clusterJson}" ]]; then
+  bypassDiscovery="$(printf '%s' "${clusterJson}" | jq -r '.spec.daemon.nsdDevicesConfig.bypassDiscovery // empty')"
 fi
 
-TEST4_DURATION=$(($(date +%s) - TEST4_START))
-add_test_result "test_cluster_device_pattern" "$TEST4_STATUS" "$TEST4_DURATION" "$TEST4_MESSAGE"
+if [[ "${bypassDiscovery}" == "false" ]]; then
+  test4Status="passed"
+else
+  test4Message="Cluster should have bypassDiscovery: false for shared SAN storage"
+fi
 
-# Display Cluster status
-echo ""
-echo "📊 Cluster Status:"
-oc get cluster "${STORAGE_SCALE_CLUSTER_NAME}" -n "${STORAGE_SCALE_NAMESPACE}" || echo "Cluster not found"
+typeset -i test4Duration=0
+test4Duration=$(($(date +%s) - test4Start))
+AddTestResult "test_cluster_auto_discovery" "${test4Status}" "${test4Duration}" "${test4Message}"
 
-echo ""
-echo "Note: Cluster initialization may take several minutes"
-echo "Daemon pods will use /dev/disk/by-id/* pattern to discover EBS volumes"
-echo "KMM will build kernel modules using Driver Toolkit"
+true
